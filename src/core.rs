@@ -101,6 +101,7 @@ use libc::{c_int, c_char};
 use std::ffi as std_ffi;
 use std::mem;
 use std::ptr;
+use std::path::Path;
 use std::slice;
 use std::str;
 use std::ffi::CStr;
@@ -248,6 +249,26 @@ impl DatabaseConnection {
             }
         }
         DatabaseConnection::new(InMemory)
+    }
+
+    /// Opens a connection to a database on disk.
+    pub fn open<P: AsRef<Path>>(path: P) -> SqliteResult<DatabaseConnection> {
+        struct AsFile {
+            db_path: String,
+        }
+
+        impl Access for AsFile {
+            fn open(self, db: *mut *mut ffi::sqlite3) -> c_int {
+                let c_path = str_charstar(&self.db_path).as_ptr();
+                unsafe { ffi::sqlite3_open(c_path, db) }
+            }
+        }
+
+        // TODO: return a proper error here. Not sure why I can't
+        // use Err(SqliteError::SQLITE_IOERR)...
+        let path_str = path.as_ref().to_str().unwrap();
+
+        DatabaseConnection::new(AsFile { db_path: String::from(path_str) })
     }
 
     /// Prepare/compile an SQL statement.
@@ -728,6 +749,7 @@ mod test_opening {
 mod tests {
     use super::{DatabaseConnection, SqliteResult, ResultSet};
     use std::str;
+    use std::path::Path;
 
     #[test]
     fn stmt_new_types() {
@@ -825,6 +847,16 @@ mod tests {
         let row = rows.step().unwrap().unwrap();
         assert_eq!(row.column_str(0), None);
         assert!(str::from_utf8(&[0x45u8, 0x46, 0xff]).is_err());
+    }
+
+    #[test]
+    fn open_on_disk() {
+        let path = Path::new("./path.db");
+        let db = DatabaseConnection::open(path).unwrap();
+        let mut stmt = db.prepare("select 1").unwrap();
+        let mut rows = stmt.execute();
+        let row = rows.step().unwrap().unwrap();
+        assert_eq!(row.column_int(0), 1);
     }
 
 }
